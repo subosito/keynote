@@ -7,6 +7,7 @@ module Keynote
   # @see file:README.md
   class Presenter
     include Keynote::Rumble
+    extend  Keynote::Inline
 
     class << self
       attr_writer :object_names

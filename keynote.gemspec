@@ -20,6 +20,7 @@ Gem::Specification.new do |gem|
   gem.version       = Keynote::VERSION
 
   gem.add_dependency 'rails', '>= 3.0.0'
+  gem.add_dependency 'tilt'
 
   gem.add_development_dependency 'appraisal'
   gem.add_development_dependency 'minitest'
