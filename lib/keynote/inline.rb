@@ -1,13 +1,93 @@
 # encoding: UTF-8
 
-require "fileutils"
 require "thread"
-require "tilt"
-require "tmpdir"
 
 module Keynote
+  # The `Inline` mixin lets you write inline templates as comments inside the
+  # body of a presenter method. You can use any template language supported by
+  # Rails.
+  #
+  # ## The `inline` method
+  #
+  # First, you have to declare what template languages you want to use by
+  # calling the {Keynote::Inline#inline} method on a presenter class:
+  #
+  #     class MyPresenter < Keynote::Presenter
+  #       presents :user, :account
+  #       inline :haml
+  #     end
+  #
+  # This defines a `#haml` instance method on the `MyPresenter` class.
+  #
+  # If you want to make inline templates available to all of your presenters,
+  # you can add an initializer like this to your application:
+  #
+  #     class Keynote::Presenter
+  #       inline :erb, :haml, :slim
+  #     end
+  #
+  # This will add `#erb`, `#haml`, and `#slim` instance methods to all of your
+  # presenters.
+  #
+  # ## Basic usage
+  #
+  # After defining one or more instance methods by calling `inline`, you can
+  # generate HTML by calling one of those methods and immediately following it
+  # with a block of comments containing your template:
+  #
+  #     def link
+  #       erb
+  #       # <%= link_to user_url(current_user) do %>
+  #       #   <%= image_tag("image1.jpg") %>
+  #       #   <%= image_tag("image2.jpg") %>
+  #       # <% end %>
+  #     end
+  #
+  # Calling this method renders the ERB template, including passing the calls
+  # to `link_to`, `user_url`, `current_user`, and `image_tag` back to the
+  # presenter object (and then to the view).
+  #
+  # ## Passing variables
+  #
+  # There are a couple of different ways to pass local variables into an inline
+  # template. The easiest is to pass the `binding` object into the template
+  # method, giving access to all local variables:
+  #
+  #     def local_binding
+  #       x = 1
+  #       y = 2
+  #
+  #       erb binding
+  #       # <%= x + y %>
+  #     end
+  #
+  # You can also pass a hash of variable names and values instead:
+  #
+  #     def local_binding
+  #       erb x: 1, y: 2
+  #       # <%= x + y %>
+  #     end
   module Inline
+    # For each template format given as a parameter, add an instance method
+    # that can be called to render an inline template in that format. Any
+    # file extension supported by Rails is a valid parameter.
+    # @example
+    #   class UserPresenter < Keynote::Presenter
+    #     presents :user
+    #     inline :haml
+    #
+    #     def header
+    #       full_name = "#{user.first_name} #{user.last_name}"
+    #
+    #       haml binding
+    #       # div#header
+    #       #   h1= full_name
+    #       #   h3= user.most_recent_status
+    #     end
+    #   end
     def inline(*formats)
+      require "action_view"
+
       Array(formats).each do |format|
         define_method format do |locals = {}|
           Renderer.new(self, locals, caller(1)[0], format).render
@@ -15,15 +95,16 @@ module Keynote
       end
     end
 
+    # @private
     class Renderer
       def initialize(presenter, locals, caller_line, format)
         @presenter = presenter
         @locals = extract_locals(locals)
-        @tilt   = TiltCache.fetch(*parse_caller(caller_line), format)
+        @template = Cache.fetch(*parse_caller(caller_line), format, @locals)
       end
 
       def render
-        @tilt.render(@presenter, @locals)
+        @template.render(@presenter, @locals)
       end
 
       private
@@ -44,54 +125,45 @@ module Keynote
       end
     end
 
-    class TiltCache
+    # @private
+    class Cache
       COMMENTED_LINE = /^\s*#(.*)$/
 
-      def self.fetch(source_file, line, format)
-        instance = (Thread.current[:_keynote_tilt_cache] ||= TiltCache.new)
-        instance.fetch(source_file, line, format)
+      def self.fetch(source_file, line, format, locals)
+        instance = (Thread.current[:_keynote_template_cache] ||= Cache.new)
+        instance.fetch(source_file, line, format, locals)
       end
 
       def self.reset
-        Thread.current[:_keynote_tilt_cache] = nil
-      end
-
-      def self.cleanup_proc(tmpdir)
-        proc { FileUtils.remove_entry_secure tmpdir }
+        Thread.current[:_keynote_template_cache] = nil
       end
 
       def initialize
-        @tmpdir = Dir.mktmpdir("keynote")
         @cache = {}
-        ObjectSpace.define_finalizer(self, self.class.cleanup_proc(@tmpdir))
       end
 
-      def fetch(source_file, line, format)
-        key = "#{source_file}:#{line}"
-        tilt, mtime = @cache[key]
+      def fetch(source_file, line, format, locals)
+        local_names = locals.keys.sort
+        cache_key   = ["#{source_file}:#{line}", *local_names].freeze
         new_mtime   = File.mtime(source_file).to_f
 
+        template, mtime = @cache[cache_key]
+
         if new_mtime != mtime
-          file = write_template_file(source_file, line, format)
-          tilt = ::Tilt.new(file)
-          @cache[key] = [tilt, new_mtime]
+          source = read_template(source_file, line)
+
+          template = ActionView::Template.new(source, cache_key[0],
+            ActionView::Template.handler_for_extension(format),
+            locals: local_names
+          )
+
+          @cache[cache_key] = [template, new_mtime]
         end
 
-        tilt
+        template
       end
 
       private
-
-      def write_template_file(source_file, line, format)
-        filename  = "#{source_file.tr('~/ ', '_')}_#{line}.#{format}"
-        full_path = "#{@tmpdir}/#{filename}"
-
-        File.open(full_path, "w") do |file|
-          file.write read_template(source_file, line)
-        end
-
-        full_path
-      end
 
       def read_template(source_file, line)
         result = ""

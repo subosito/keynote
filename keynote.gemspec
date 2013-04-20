@@ -20,7 +20,6 @@ Gem::Specification.new do |gem|
   gem.version       = Keynote::VERSION
 
   gem.add_dependency 'rails', '>= 3.0.0'
-  gem.add_dependency 'tilt'
 
   gem.add_development_dependency 'appraisal'
   gem.add_development_dependency 'minitest'
@@ -28,4 +27,7 @@ Gem::Specification.new do |gem|
   gem.add_development_dependency 'pry'
   gem.add_development_dependency 'redcarpet'
   gem.add_development_dependency 'yard'
+
+  gem.add_development_dependency 'slim'
+  gem.add_development_dependency 'haml'
 end
